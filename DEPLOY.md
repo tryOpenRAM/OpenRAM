@@ -26,3 +26,11 @@ The service serves the site itself: `/`, `/app` and `/docs` are the pages, `/sta
    | `STATE_DIR` | `/data` — persists the ops-wallet key + past-race history on the volume |
    | `AGENT_SECRET_1..5` | the 5 house agent wallets (0x-prefixed hex private keys — MetaMask/Rabby export) |
    | `TREASURY_ADDRESS` | your treasury's PUBLIC address (receive-only — rent, rake & sweeps flow here; no key on the server) |
+   | `VAST_API_KEY` | your vast.ai key (live GPU-market pricing) |
+   | `PUBLIC_URL` | your Railway URL, e.g. `https://hedgebots.up.railway.app` (fills in the own-rig command players copy) |
+   | `PUBLIC_WALLETS` | `agents` (agent addresses shown, treasury hidden) or `1` at full launch |
+   | *(optional)* `TREASURY_SECRET` | only if you want a specific ops wallet; else one is generated on the volume and reused |
+   | *(optional)* `CREDIT_GWEI`, `MIN_ENTRY_ETH`, `MAX_ENTRY_ETH`, `MIN_SIDEBET_ETH`, `AGENT_FLOAT_ETH`, `VAST_GPU`, `EXPLORER_URL` | economics/market tuning |
+5. Railway gives you a URL like `https://hedgebots.up.railway.app` — **that's the whole product**: site + API + own-rig worker endpoint, one URL. Put that same URL in `PUBLIC_URL`.
+
+**Persistence (data saved across redeploys):** Railway's filesystem is ephemeral — anything written at runtime is wiped on each deploy. The volume at `/data` + `STATE_DIR=/data` fixes this: the ops-wallet key (`evm-keys.json`) and past-race history (`races-evm.json`) live on the volume and survive. *Without* the volume the ops wallet regenerates every deploy (orphaning its balance) and past races reset. The live in-progress race always restarts fresh on a redeploy (stakes are already swept to the ops wallet, so no funds are lost) — deploy between races.
