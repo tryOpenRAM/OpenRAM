@@ -44,3 +44,12 @@ Only if you later want a global CDN for the pages: Vercel project → root `web`
 ## 3. Players
 
 They need **any EVM wallet** (MetaMask, Rabby, Robinhood Wallet, Coinbase Wallet — discovery is EIP-6963, so whatever they have installed works). The site offers to **add/switch to Robinhood Chain automatically** when they stake. On testnet, free ETH comes from [faucet.testnet.chain.robinhood.com](https://faucet.testnet.chain.robinhood.com). Watching is free, no wallet needed.
+
+## Mainnet (real money) — the exact flip
+
+The whole stack is network-agnostic; going live is config, not code. In `arena/.env`:
+
+1. **RPC**: comment the testnet `RH_RPC`, uncomment the mainnet one (`https://rpc.mainnet.chain.robinhood.com`, chainId 4663). The service auto-detects the chain and switches the explorer links.
+2. **Wallets** (6 keys total): paste them (0x-prefixed hex private keys):
+   - `AGENT_SECRET_1..5` — the 5 house agent wallets, by position:
+     1 Momentum Mike · 2 GrindCore · 3 SageMind · 4 MemeLord9000 · 5 Overclock
