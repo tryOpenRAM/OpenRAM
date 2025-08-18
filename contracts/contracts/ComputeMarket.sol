@@ -82,3 +82,87 @@ contract ComputeMarket is Ownable, ReentrancyGuard {
     event RentalRequested(uint64 indexed rentalId, uint64 indexed providerId, uint64 indexed agentId, uint32 units, uint32 durationSecs, uint256 cost);
     event RentalConfirmed(uint64 indexed rentalId);
     event RentalCompleted(uint64 indexed rentalId, uint256 providerPay, uint256 fee);
+    event RentalFailed(uint64 indexed rentalId, uint256 refund, uint256 slashed);
+    event RentalCancelled(uint64 indexed rentalId);
+
+    constructor(IERC20 _cycle, IAgentRegistryMin _registry, IStakingVaultMin _vault, uint256 _minProviderStake)
+        Ownable(msg.sender)
+    {
+        cycle = _cycle;
+        registry = _registry;
+        vault = _vault;
+        minProviderStake = _minProviderStake;
+        _cycle.approve(address(_vault), type(uint256).max);
+    }
+
+    // ---------------------------------------------------------------- admin
+
+    function setParams(uint256 _minProviderStake, uint16 _feeBps, uint32 _confirmWindow) external onlyOwner {
+        require(_feeBps <= 2000, "compute: fee too high");
+        minProviderStake = _minProviderStake;
+        feeBps = _feeBps;
+        confirmWindow = _confirmWindow;
+    }
+
+    // ------------------------------------------------------------ providers
+
+    function registerProvider(
+        string calldata name,
+        string calldata region,
+        string calldata gpuModel,
+        uint32 units,
+        uint256 pricePerUnitHour
+    ) external nonReentrant returns (uint64 providerId) {
+        require(accountToProviderId[msg.sender] == 0, "compute: already provider");
+        require(units > 0 && pricePerUnitHour > 0, "compute: bad listing");
+        require(cycle.transferFrom(msg.sender, address(this), minProviderStake), "compute: stake failed");
+
+        providerId = ++providerCount;
+        Provider storage p = _providers[providerId];
+        p.id = providerId;
+        p.account = msg.sender;
+        p.name = name;
+        p.region = region;
+        p.gpuModel = gpuModel;
+        p.totalUnits = units;
+        p.availableUnits = units;
+        p.pricePerUnitHour = pricePerUnitHour;
+        p.stake = minProviderStake;
+        p.active = true;
+        p.registeredAt = uint64(block.timestamp);
+
+        accountToProviderId[msg.sender] = providerId;
+        emit ProviderRegistered(providerId, msg.sender, name, gpuModel, units, pricePerUnitHour);
+    }
+
+    function deactivateProvider(uint64 providerId) external {
+        Provider storage p = _providers[providerId];
+        require(p.id != 0 && msg.sender == p.account, "compute: not provider");
+        require(p.active, "compute: inactive");
+        p.active = false;
+        emit ProviderDeactivated(providerId);
+    }
+
+    /// @notice After deactivation and once all units are back (no live
+    /// rentals), the provider reclaims remaining stake.
+    function withdrawProviderStake(uint64 providerId) external nonReentrant {
+        Provider storage p = _providers[providerId];
+        require(p.id != 0 && msg.sender == p.account, "compute: not provider");
+        require(!p.active, "compute: still active");
+        require(p.availableUnits == p.totalUnits, "compute: rentals live");
+        uint256 amount = p.stake;
+        require(amount > 0, "compute: nothing staked");
+        p.stake = 0;
+        require(cycle.transfer(p.account, amount), "compute: transfer failed");
+        emit ProviderStakeWithdrawn(providerId, amount);
+    }
+
+    // -------------------------------------------------------------- rentals
+
+    /// @notice Called by an agent wallet: escrow rent for `units` over
+    /// `durationSecs`. cost = price * units * duration / 3600.
+    function rent(uint64 providerId, uint32 units, uint32 durationSecs)
+        external
+        nonReentrant
+        returns (uint64 rentalId)
+    {
