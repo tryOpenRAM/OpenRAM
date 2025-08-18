@@ -166,3 +166,87 @@ contract ComputeMarket is Ownable, ReentrancyGuard {
         nonReentrant
         returns (uint64 rentalId)
     {
+        Provider storage p = _providers[providerId];
+        require(p.id != 0, "compute: no provider");
+        require(p.active, "compute: provider inactive");
+        require(units > 0 && units <= p.availableUnits, "compute: no capacity");
+        require(durationSecs >= 10 && durationSecs <= 7 days, "compute: bad duration");
+
+        uint64 agentId = registry.walletToAgentId(msg.sender);
+        require(agentId != 0 && registry.isActive(agentId), "compute: not an agent");
+
+        uint256 cost = (p.pricePerUnitHour * units * durationSecs) / 3600;
+        require(cost > 0, "compute: zero cost");
+        require(cycle.transferFrom(msg.sender, address(this), cost), "compute: escrow failed");
+
+        p.availableUnits -= units;
+
+        rentalId = ++rentalCount;
+        _rentals[rentalId] = Rental({
+            id: rentalId,
+            providerId: providerId,
+            agentId: agentId,
+            units: units,
+            durationSecs: durationSecs,
+            requestedAt: uint64(block.timestamp),
+            startedAt: 0,
+            cost: cost,
+            status: RentalStatus.Requested
+        });
+        emit RentalRequested(rentalId, providerId, agentId, units, durationSecs, cost);
+    }
+
+    function confirmRental(uint64 rentalId) external {
+        Rental storage r = _rentals[rentalId];
+        require(r.id != 0, "compute: no rental");
+        require(r.status == RentalStatus.Requested, "compute: not requested");
+        require(msg.sender == _providers[r.providerId].account, "compute: not provider");
+        r.status = RentalStatus.Active;
+        r.startedAt = uint64(block.timestamp);
+        emit RentalConfirmed(rentalId);
+    }
+
+    /// @notice Agent may cancel an unconfirmed rental (e.g. provider silent
+    /// past the confirm window) for a full refund.
+    function cancelRental(uint64 rentalId) external nonReentrant {
+        Rental storage r = _rentals[rentalId];
+        require(r.id != 0, "compute: no rental");
+        require(r.status == RentalStatus.Requested, "compute: not requested");
+        require(msg.sender == registry.agentWallet(r.agentId), "compute: not renter");
+        r.status = RentalStatus.Cancelled;
+        _providers[r.providerId].availableUnits += r.units;
+        require(cycle.transfer(msg.sender, r.cost), "compute: refund failed");
+        emit RentalCancelled(rentalId);
+    }
+
+    /// @notice Settle a rental: the renting agent may settle any time once
+    /// active; anyone may settle after the rental period lapses (frees
+    /// capacity). Provider gets rent minus protocol fee.
+    function completeRental(uint64 rentalId) external nonReentrant {
+        Rental storage r = _rentals[rentalId];
+        require(r.id != 0, "compute: no rental");
+        require(r.status == RentalStatus.Active, "compute: not active");
+        bool isRenter = msg.sender == registry.agentWallet(r.agentId);
+        require(isRenter || block.timestamp >= r.startedAt + r.durationSecs, "compute: still running");
+
+        r.status = RentalStatus.Completed;
+        Provider storage p = _providers[r.providerId];
+        p.availableUnits += r.units;
+        p.completedRentals += 1;
+
+        uint256 fee = (r.cost * feeBps) / 10_000;
+        uint256 providerPay = r.cost - fee;
+        if (fee > 0) {
+            vault.notifyFee(fee);
+            totalFeesRouted += fee;
+        }
+        p.totalEarned += providerPay;
+        totalComputeVolume += r.cost;
+        // index accounting: this settlement's contribution to the price of compute
+        uint256 unitSeconds = uint256(r.units) * r.durationSecs;
+        totalUnitSeconds += unitSeconds;
+        uint64 epoch = registry.currentEpoch();
+        epochRentSpend[epoch] += r.cost;
+        epochUnitSeconds[epoch] += unitSeconds;
+        require(cycle.transfer(p.account, providerPay), "compute: pay failed");
+        registry.recordComputeSpend(r.agentId, r.cost);
