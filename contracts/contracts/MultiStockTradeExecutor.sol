@@ -55,3 +55,59 @@ contract MultiStockTradeExecutor {
 
     event StockPurchased(
         address indexed buyer,
+        string symbol,
+        address indexed stockToken,
+        uint256 usdgSpent,
+        uint256 stockTokensReceived
+    );
+
+    error ReentrantCall();
+    error UnsupportedStock(address token);
+    error InvalidAmount();
+    error DeadlineExpired();
+    error TokenCallFailed();
+    error InsufficientOutput(uint256 received, uint256 minimum);
+
+    constructor() {
+        _safeApprove(USDG, PERMIT2, type(uint256).max);
+        IPermit2MultiStock(PERMIT2).approve(
+            USDG,
+            UNIVERSAL_ROUTER,
+            type(uint160).max,
+            type(uint48).max
+        );
+    }
+
+    function buyStock(
+        address stockToken,
+        uint256 usdgIn,
+        uint256 minStockOut,
+        uint256 deadline
+    ) external returns (uint256 received) {
+        string memory symbol = symbolOf(stockToken);
+        if (entered) revert ReentrantCall();
+        if (usdgIn == 0 || usdgIn > type(uint128).max || minStockOut > type(uint128).max) {
+            revert InvalidAmount();
+        }
+        if (block.timestamp > deadline) revert DeadlineExpired();
+        entered = true;
+
+        _safeTransferFrom(USDG, msg.sender, address(this), usdgIn);
+        uint256 beforeBalance = IERC20MultiStock(stockToken).balanceOf(address(this));
+
+        PathKey[] memory path = new PathKey[](1);
+        path[0] = PathKey({
+            intermediateCurrency: stockToken,
+            fee: POOL_FEE,
+            tickSpacing: TICK_SPACING,
+            hooks: address(0),
+            hookData: bytes("")
+        });
+        uint256[] memory minHopPriceX36 = new uint256[](0);
+        ExactInputParams memory swap = ExactInputParams({
+            currencyIn: USDG,
+            path: path,
+            minHopPriceX36: minHopPriceX36,
+            amountIn: uint128(usdgIn),
+            amountOutMinimum: uint128(minStockOut)
+        });
