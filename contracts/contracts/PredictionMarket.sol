@@ -110,3 +110,59 @@ contract PredictionMarket is Ownable, ReentrancyGuard {
     /// @notice Trustless resolution from the registry's epoch ledger, any
     /// time after the epoch ends. Ties split across all tied camps. Markets
     /// void (full refunds) when max earnings are zero or the winning camp is
+    /// empty.
+    function resolve(uint64 marketId) external nonReentrant {
+        Market storage m = _markets[marketId];
+        require(m.id != 0, "predict: no market");
+        require(!m.resolved, "predict: resolved");
+        require(block.timestamp >= registry.epochEndTime(m.epoch), "predict: epoch live");
+
+        uint256 maxEarnings = 0;
+        for (uint256 i = 0; i < m.candidates.length; i++) {
+            uint256 e = registry.epochEarnings(m.epoch, m.candidates[i]);
+            if (e > maxEarnings) maxEarnings = e;
+        }
+
+        m.resolved = true;
+
+        if (maxEarnings == 0) {
+            m.voided = true;
+            emit MarketResolved(marketId, m.winners, m.totalPool, 0, 0, true);
+            return;
+        }
+
+        uint256 winnersPool = 0;
+        for (uint256 i = 0; i < m.candidates.length; i++) {
+            uint64 cand = m.candidates[i];
+            if (registry.epochEarnings(m.epoch, cand) == maxEarnings) {
+                m.winners.push(cand);
+                winnersPool += poolOf[marketId][cand];
+            }
+        }
+        m.winnersPool = winnersPool;
+
+        if (winnersPool == 0) {
+            // nobody backed the actual winner: void, full refunds
+            m.voided = true;
+            emit MarketResolved(marketId, m.winners, m.totalPool, 0, 0, true);
+            return;
+        }
+
+        uint256 fee = (m.totalPool * feeBps) / 10_000;
+        if (fee > 0) {
+            m.feeTaken = fee;
+            vault.notifyFee(fee);
+            totalFeesRouted += fee;
+        }
+        emit MarketResolved(marketId, m.winners, m.totalPool, winnersPool, fee, false);
+    }
+
+    function claim(uint64 marketId) external nonReentrant returns (uint256 payout) {
+        Market storage m = _markets[marketId];
+        require(m.id != 0, "predict: no market");
+        require(m.resolved, "predict: unresolved");
+        require(!claimed[marketId][msg.sender], "predict: claimed");
+        claimed[marketId][msg.sender] = true;
+
+        if (m.voided) {
+            for (uint256 i = 0; i < m.candidates.length; i++) {
