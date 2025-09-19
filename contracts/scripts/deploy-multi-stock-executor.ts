@@ -37,3 +37,8 @@ async function main() {
   if (!receipt || receipt.status !== 1) throw new Error("deployment reverted");
   console.log(JSON.stringify({ result: "DEPLOYED", executor: await executor.getAddress(), tx: receipt.hash, gasUsed: receipt.gasUsed.toString() }, null, 2));
 }
+
+main().catch((error) => {
+  console.error("ERR:", error?.shortMessage ?? error?.message ?? error);
+  process.exit(1);
+});
