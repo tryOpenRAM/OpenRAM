@@ -79,3 +79,23 @@ async function main() {
   );
   await predict.waitForDeployment();
   const faucet = await (await ethers.getContractFactory("CycleFaucet")).deploy(cycle);
+  await faucet.waitForDeployment();
+
+  // wire the protocol graph
+  await (await registry.setShares(shares)).wait();
+  await (await registry.setVault(vault)).wait();
+  await (await registry.setMarket(tasks, true)).wait();
+  await (await registry.setMarket(compute, true)).wait();
+  await (await tasks.setParams(E(1), 1000, 500, 1000, REVIEW_WINDOW)).wait();
+
+  // seed the economy
+  await (await cycle.mint(deployer.address, E(1_000_000))).wait();
+  await (await cycle.mint(await faucet.getAddress(), FAUCET_SUPPLY)).wait();
+  for (const [idx, amount] of MINTS) {
+    await (await cycle.mint(actorAddress(idx), amount)).wait();
+  }
+  console.log(`  minted: treasury, ${MINTS.length} swarm actors, faucet (${ethers.formatEther(FAUCET_SUPPLY)} CYCLE)`);
+
+  // public networks: the swarm actors also need gas ETH from the deployer
+  if (!isLocal) {
+    for (const [idx] of MINTS) {
