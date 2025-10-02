@@ -139,3 +139,22 @@ async function main() {
     path.join(root, "agents", "src", "generated"),
     path.join(root, "web", "src", "generated"),
   ];
+  for (const dir of outDirs) {
+    fs.mkdirSync(path.join(dir, "abi"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "addresses.json"), JSON.stringify(addresses, null, 2));
+    for (const name of CONTRACT_NAMES) {
+      const artifact = await artifacts.readArtifact(name);
+      fs.writeFileSync(path.join(dir, "abi", `${name}.json`), JSON.stringify(artifact.abi, null, 2));
+    }
+  }
+  console.log(`Exported addresses + ABIs to:\n  ${outDirs.join("\n  ")}`);
+  if (!isLocal) {
+    console.log("\nNext: run the swarm against this deployment (SWARM_MNEMONIC in agents/.env),");
+    console.log("push the repo, and import web/ into Vercel. See README > Go public.");
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
