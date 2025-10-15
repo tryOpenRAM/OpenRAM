@@ -46,3 +46,50 @@ describe("AGORA end-to-end economy", () => {
 
     await tasks.connect(agentWallet1).bid(1, E(60));
     await tasks.connect(agentWallet2).bid(1, E(80));
+    await tasks.connect(agentWallet2).bid(2, E(140));
+    await tasks.connect(agentWallet3).bid(3, E(90));
+    await tasks.connect(agentWallet2).bid(3, E(100));
+
+    await time.increase(BID_WINDOW + 1);
+    await tasks.finalizeBidding(1); // Nexus-7 at 60
+    await tasks.finalizeBidding(2); // SageMind at 140
+    await tasks.finalizeBidding(3); // Nexus-Jr at 90
+    expect((await tasks.getTask(1)).assignedAgentId).to.equal(1n);
+    expect((await tasks.getTask(2)).assignedAgentId).to.equal(2n);
+    expect((await tasks.getTask(3)).assignedAgentId).to.equal(3n);
+
+    // ------------------------------------------------ winners rent raw compute
+    await compute.connect(agentWallet1).rent(1, 4, 1800);  // 4 CYCLE
+    await compute.connect(agentWallet2).rent(1, 8, 3600);  // 16 CYCLE
+    await compute.connect(agentWallet3).rent(1, 2, 1800);  // 2 CYCLE
+    for (const r of [1, 2, 3]) await compute.connect(providerAcct).confirmRental(r);
+    await compute.connect(agentWallet1).completeRental(1);
+    await compute.connect(agentWallet2).completeRental(2);
+    await compute.connect(agentWallet3).completeRental(3);
+    expect((await compute.getProvider(1)).availableUnits).to.equal(16);
+
+    // ------------------------------------------------ results land; economics settle
+    await tasks.connect(agentWallet1).submitResult(1, "data:result1", ethers.id("r1"));
+    await tasks.connect(agentWallet2).submitResult(2, "data:result2", ethers.id("r2"));
+    await tasks.connect(agentWallet3).submitResult(3, "data:result3", ethers.id("r3"));
+
+    await tasks.connect(poster).approveResult(1);
+    await tasks.connect(poster).approveResult(2);
+    await tasks.connect(poster).rejectResult(3, "hash mismatch"); // Jr fumbled
+
+    // reputation & the epoch ledger reflect reality
+    expect((await registry.getAgent(1)).reputation).to.equal(110n);
+    expect((await registry.getAgent(2)).reputation).to.equal(110n);
+    expect((await registry.getAgent(3)).reputation).to.equal(50n);
+    expect(await registry.epochEarnings(epoch, 1)).to.equal(E(60));
+    expect(await registry.epochEarnings(epoch, 2)).to.equal(E(140));
+    expect(await registry.epochEarnings(epoch, 3)).to.equal(0n);
+    expect(await registry.epochTotalEarnings(epoch)).to.equal(E(200));
+    expect((await registry.getAgent(1)).lifetimeComputeSpend).to.equal(E(4));
+
+    // dividends: Nexus-7's 6 CYCLE dividend split 1:3 owner:speculator1
+    expect(await shares.pendingDividends(1, agentOwner.address)).to.equal(E(1.5));
+    expect(await shares.pendingDividends(1, speculator1.address)).to.equal(E(4.5));
+    expect(await shares.pendingDividends(2, agentOwner.address)).to.equal(E(14));
+
+    // ------------------------------------------------ the epoch race resolves trustlessly
