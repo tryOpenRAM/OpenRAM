@@ -59,3 +59,64 @@ export interface RaceAgent {
   revenue: number;           // gross gains realized (display)
   computeSpend: number;      // legacy, 0 in trading mode
   jobsWon: number;           // trades placed
+  jobsVerified: number;      // winning round-trips
+  jobsRejected: number;      // losing round-trips
+  gflops: number;            // legacy, 0 in trading mode
+  cpuSeconds: number;
+
+  creditHistory: Array<{ t: number; v: number }>; // the P&L curve
+  events: AgentEvent[];
+}
+
+export interface Fill {
+  t: number;
+  sym: string;
+  side: "buy" | "sell";
+  qty: number;          // shares
+  px: number;           // USD fill price (live market at fill time)
+  usd: number;          // notional
+  receiptTx?: string;   // on-chain anchor (batched)
+  stockTx?: string;     // actual Robinhood Stock Token purchase
+  approvalTx?: string;  // exact-amount USDG approval, when one was needed
+  stockToken?: string;
+  stockAmount?: string;
+  stockAction?: "buy" | "sell";
+  usdgAmount?: string;
+}
+
+export const BANKROLL_USD = 10_000; // every agent starts each race with this paper book
+
+export function newAgent(partial: Pick<RaceAgent, "id" | "name" | "strategy" | "house" | "owner" | "depositAddress" | "funded" | "entryEth" | "backend"> & { claimToken?: string }): RaceAgent {
+  return {
+    ...partial,
+    stakedEth: 0,
+    workerLastSeen: 0,
+    cash: BANKROLL_USD, positions: {}, fills: [], equity: BANKROLL_USD,
+    credits: 0, revenue: 0, computeSpend: 0,
+    jobsWon: 0, jobsVerified: 0, jobsRejected: 0,
+    gflops: 0, cpuSeconds: 0,
+    creditHistory: [{ t: Date.now(), v: 0 }],
+    events: [],
+  };
+}
+
+/** Re-mark the whole book at live prices; credits = P&L in USD. */
+export function markToMarket(a: RaceAgent, pxOf: (sym: string) => number | undefined): void {
+  let held = 0;
+  for (const [sym, p] of Object.entries(a.positions)) {
+    const px = pxOf(sym);
+    if (px) held += p.qty * px;
+  }
+  a.equity = Math.round((a.cash + held) * 100) / 100;
+  a.credits = Math.round((a.equity - BANKROLL_USD) * 100) / 100;
+}
+
+/**
+ * One trading decision for one tick. Returns a fill intent or null (hold).
+ * Personas differ in cadence, sizing, universe and signal:
+ *   trend  — follows the 3-min move; revert — fades it (buys dips);
+ *   chase  — hunts whatever moved most across the whole basket.
+ */
+export function decideTrade(
+  a: RaceAgent,
+  basket: string[],
