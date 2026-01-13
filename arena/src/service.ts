@@ -523,3 +523,265 @@ async function mirrorRealStockBuy(a: RaceAgent, fill: Trade): Promise<boolean> {
     realStockLots.set(wallet.address, { sym: purchase.symbol, amount: purchase.stockReceived });
     if (purchase.approvalTx) pushWalletTx(wallet.address, purchase.approvalTx);
     pushWalletTx(wallet.address, purchase.purchaseTx);
+    logEvent(a, `ON-CHAIN ${purchase.usdgSpent} USDG -> ${purchase.stockReceived} ${purchase.symbol} (${purchase.purchaseTx.slice(0, 10)}...)`);
+    return true;
+  } catch (e: any) {
+    realStockBuysThisRace -= 1;
+    realStockBuysByWallet.set(wallet.address, Math.max(0, (realStockBuysByWallet.get(wallet.address) ?? 1) - 1));
+    stockBuyPaused.set(wallet.address, Date.now() + 60_000);
+    log(`stock buy paused for ${a.name}: ${String(e?.shortMessage ?? e?.message ?? e).slice(0, 100)}`);
+    return false;
+  }
+}
+
+/** Guarantee one diversified $3 entry per house wallet when the race opens. */
+async function ensureRaceStockEntries(r: Race): Promise<void> {
+  await Promise.all(r.agents.filter((a) => a.house).map(async (a, i) => {
+    const wallet = houseWalletByName.get(a.name);
+    if (!wallet || (realStockBuysByWallet.get(wallet.address) ?? 0) > 0) return;
+    const sym = LIQUID_SYMBOLS[(r.id + i) % LIQUID_SYMBOLS.length];
+    const fill: Trade = {
+      t: Date.now(), sym, side: "buy", qty: 0, px: pxOf(sym) ?? 0, usd: REAL_STOCK_BUY_USDG,
+      agentId: a.id, name: a.name, strategy: a.strategy,
+    };
+    if (await mirrorRealStockBuy(a, fill)) {
+      a.fills.push(fill);
+      if (a.fills.length > 60) a.fills.shift();
+      r.trades.push(fill);
+      if (r.trades.length > 120) r.trades.shift();
+      pendingAnchor.push(fill);
+    }
+  }));
+}
+
+async function mirrorRealStockSell(a: RaceAgent, fill: Trade, force = false): Promise<boolean> {
+  if (!REAL_STOCK_SELLS || fill.side !== "sell" || !a.house) return false;
+  if (realStockSellsThisRace >= REAL_STOCK_MAX_SELLS_PER_RACE) return false;
+  const wallet = houseWalletByName.get(a.name);
+  if (!wallet || (!force && (stockBuyPaused.get(wallet.address) ?? 0) > Date.now())) return false;
+  if ((realStockSellsByWallet.get(wallet.address) ?? 0) >= REAL_STOCK_MAX_SELLS_PER_WALLET) return false;
+  if (!LIQUID_SYMBOLS.includes(fill.sym as LiquidStockSymbol)) return false;
+  const lot = realStockLots.get(wallet.address);
+  if (!lot || lot.sym !== fill.sym) return false;
+
+  realStockSellsThisRace += 1;
+  realStockSellsByWallet.set(wallet.address, (realStockSellsByWallet.get(wallet.address) ?? 0) + 1);
+  try {
+    const sale = await sellStockToken(wallet, fill.sym as LiquidStockSymbol, {
+      executor: STOCK_SELL_EXECUTOR_ADDRESS,
+      slippageBps: REAL_STOCK_SLIPPAGE_BPS,
+      maxGasEth: REAL_STOCK_MAX_GAS_ETH,
+      stockAmount: lot.amount,
+    });
+    if (!sale) {
+      realStockSellsThisRace -= 1;
+      realStockSellsByWallet.set(wallet.address, Math.max(0, (realStockSellsByWallet.get(wallet.address) ?? 1) - 1));
+      return false;
+    }
+    fill.stockTx = sale.saleTx;
+    fill.approvalTx = sale.approvalTx;
+    fill.stockToken = sale.token;
+    fill.stockAmount = sale.stockSold;
+    fill.stockAction = "sell";
+    fill.usdgAmount = sale.usdgReceived;
+    realStockLots.delete(wallet.address);
+    if (sale.approvalTx) pushWalletTx(wallet.address, sale.approvalTx);
+    pushWalletTx(wallet.address, sale.saleTx);
+    logEvent(a, `ON-CHAIN ${sale.stockSold} ${sale.symbol} -> ${sale.usdgReceived} USDG (${sale.saleTx.slice(0, 10)}...)`);
+    return true;
+  } catch (e: any) {
+    realStockSellsThisRace -= 1;
+    realStockSellsByWallet.set(wallet.address, Math.max(0, (realStockSellsByWallet.get(wallet.address) ?? 1) - 1));
+    stockBuyPaused.set(wallet.address, Date.now() + 60_000);
+    log(`stock sell paused for ${a.name}: ${String(e?.shortMessage ?? e?.message ?? e).slice(0, 100)}`);
+    return false;
+  }
+}
+
+/** Close every real clip opened this race so capital returns to USDG. */
+async function liquidateRaceStockLots(r: Race): Promise<void> {
+  for (const a of r.agents) {
+    if (!a.house) continue;
+    const wallet = houseWalletByName.get(a.name);
+    const lot = wallet ? realStockLots.get(wallet.address) : undefined;
+    if (!lot) continue;
+    const px = pxOf(lot.sym) ?? 0;
+    const qty = Number(lot.amount);
+    const fill: Trade = {
+      t: Date.now(), sym: lot.sym, side: "sell", qty, px, usd: qty * px,
+      agentId: a.id, name: a.name, strategy: a.strategy,
+    };
+    if (await mirrorRealStockSell(a, fill, true)) {
+      a.fills.push(fill);
+      if (a.fills.length > 60) a.fills.shift();
+      r.trades.push(fill);
+      if (r.trades.length > 120) r.trades.shift();
+      pendingAnchor.push(fill);
+    }
+  }
+}
+
+function runTradingRound(): void {
+  if (!race || !marketStatus().live) return;
+  for (const a of race.agents) {
+    if (!a.funded) continue;
+    const decision = decideTrade(a, SYMS, momOf, pxOf, rng);
+    if (!decision) continue;
+    const intent = diversifyBuy(a, decision);
+    const mid = pxOf(intent.sym);
+    if (!mid) continue;
+    const slip = 1 + (intent.side === "buy" ? 1 : -1) * (0.0003 + rng() * 0.0007);
+    const px = Math.round(mid * slip * 100) / 100;
+    const usd = Math.round(intent.qty * px * 100) / 100;
+    if (usd < 25) continue;
+
+    const pos = (a.positions[intent.sym] = a.positions[intent.sym] ?? { qty: 0, cost: 0 });
+    if (intent.side === "buy") {
+      if (usd > a.cash) continue;
+      a.cash = Math.round((a.cash - usd) * 100) / 100;
+      pos.qty = Math.round((pos.qty + intent.qty) * 10000) / 10000;
+      pos.cost = Math.round((pos.cost + usd) * 100) / 100;
+      logEvent(a, `BUY ${intent.qty} ${intent.sym} @ $${px.toFixed(2)} (${momOf(intent.sym) >= 0 ? "+" : ""}${momOf(intent.sym).toFixed(2)}% 3m)`);
+      const recent = recentBuySymbols.get(a.id) ?? [];
+      recentBuySymbols.set(a.id, [intent.sym, ...recent.filter((s) => s !== intent.sym)].slice(0, 2));
+    } else {
+      if (pos.qty < intent.qty) continue;
+      const avg = pos.qty > 0 ? pos.cost / pos.qty : px;
+      const realized = Math.round((px - avg) * intent.qty * 100) / 100;
+      a.cash = Math.round((a.cash + usd) * 100) / 100;
+      pos.qty = Math.round((pos.qty - intent.qty) * 10000) / 10000;
+      pos.cost = Math.round(avg * pos.qty * 100) / 100;
+      if (pos.qty <= 0) delete a.positions[intent.sym];
+      if (realized >= 0) { a.jobsVerified += 1; a.revenue = Math.round((a.revenue + realized) * 100) / 100; }
+      else a.jobsRejected += 1;
+      logEvent(a, `SELL ${intent.qty} ${intent.sym} @ $${px.toFixed(2)} — realized ${fmtUsd(realized)}`);
+    }
+    a.jobsWon += 1;
+    const fill: Trade = { t: Date.now(), sym: intent.sym, side: intent.side, qty: intent.qty, px, usd, agentId: a.id, name: a.name, strategy: a.strategy };
+    a.fills.push(fill);
+    if (a.fills.length > 60) a.fills.shift();
+    race.trades.push(fill);
+    if (race.trades.length > 120) race.trades.shift();
+    pendingAnchor.push(fill);
+    if (fill.side === "buy") void mirrorRealStockBuy(a, fill);
+    else void mirrorRealStockSell(a, fill);
+  }
+}
+
+/** Anchor recent fills on-chain in one calldata batch — the tape becomes a
+ *  permanent public record anyone can audit against the live token markets. */
+async function anchorPendingFills(): Promise<void> {
+  if (!race || pendingAnchor.length === 0) return;
+  const batch = pendingAnchor.splice(0, 10);
+  const hash = await writeReceipt({
+    t: "trade-fills", race: race.id, market: marketStatus().explorer,
+    fills: batch.map((f) => ({ agent: f.name, sym: f.sym, side: f.side, qty: f.qty, px: f.px, usd: f.usd, at: f.t })),
+  });
+  if (hash) for (const f of batch) f.receiptTx = hash;
+  else pendingAnchor.unshift(...batch); // receipts paused — retry next pass
+}
+
+async function tick(): Promise<void> {
+  if (!race) return;
+  if (RACES_PAUSED) return;
+  const now = Date.now();
+  const racing = now >= race.startsAt && now < race.endsAt; // trading only during the race, not the lobby
+
+  if (racing) {
+    void ensureRaceStockEntries(race);
+    if (now - lastTradeAt > TRADE_MS) {
+      lastTradeAt = now;
+      runTradingRound();
+    }
+    for (const a of race.agents) if (a.funded) { markToMarket(a, pxOf); snapshotCredits(a); }
+  }
+
+  if (now >= race.endsAt && !race.settled) {
+    try {
+      await settle(race);
+    } catch (e: any) {
+      log(`settle error (rolling on anyway): ${String(e?.message ?? e).slice(0, 120)}`);
+    }
+    const { jobs, trades, ...persistable } = race; // keep the db light
+    db.pastRaces.unshift({ ...persistable, jobs: [], trades: [] } as Race);
+    db.pastRaces.splice(10);
+    saveDb();
+    race = newRace();
+    void refreshRealPortfolios(true).catch(() => {});
+    void initRaceSpendCaps().catch(() => {}); // snapshot each agent's 5% budget
+  }
+}
+
+// ---------------------------------------------------------- deposit watcher
+// Solvency rules (fixes audited money bugs):
+//  - credit the pool ONLY after a CONFIRMED sweep, and only the amount the
+//    treasury actually received (balance − gas) — never money it doesn't hold;
+//  - an in-flight lock stops overlapping 5s passes from double-counting;
+//  - phase-gate: entries that confirm after the lock (+grace) are refunded,
+//    not entered; side bets that confirm after their cutoff are refunded.
+const LATE_GRACE_MS = 30_000;
+const inFlight = new Set<string>();
+
+async function watchDeposits(): Promise<void> {
+  if (RACES_PAUSED) return;
+  if (!race) return;
+  const now = Date.now();
+
+  // ---- entry stakes
+  for (const a of race.agents) {
+    if (a.house || a.funded || !a.depositAddress || inFlight.has(a.depositAddress)) continue;
+    inFlight.add(a.depositAddress);
+    try {
+      const kp = depositFor(a.id);
+      const bal = await getBalanceWei(kp.address);
+      // the deposit must also cover its own sweep gas — require a hair over entry
+      if (bal >= ethToWei(a.entryEth)) {
+        if (now >= race.startsAt + LATE_GRACE_MS && a.owner) {
+          // missed the lock — refund the staker, keep them out of the race
+          try {
+            const r = await drainTo(kp, a.owner);
+            if (r) log(`late entry for "${a.name}" refunded ${fmtEth(r.ethMoved)} ETH (missed the lock)`);
+          } catch (e: any) { log(`late entry refund failed (will retry): ${String(e?.message ?? e).slice(0, 60)}`); }
+        } else {
+          try {
+            const r = await drainTo(kp, treasury.address);   // money into treasury FIRST
+            if (r) {
+              a.funded = true;
+              a.stakedEth = r.ethMoved;
+              race.potEth += r.ethMoved;                     // credit only what treasury holds
+              logEvent(a, `entry funded - IN THE ARENA on ${a.backend === "own" ? "OWNER'S RIG" : "the vast pool"}`);
+              log(`agent "${a.name}" staked ${fmtEth(r.ethMoved)} ETH - pot ${fmtEth(race.potEth)} ETH`);
+            }
+          } catch (e: any) { log(`entry sweep failed, retry next pass: ${String(e?.message ?? e).slice(0, 60)}`); }
+        }
+      }
+    } catch { /* rpc hiccup */ }
+    finally { inFlight.delete(a.depositAddress); }
+  }
+
+  // ---- side bets
+  for (const b of race.sideBets) {
+    if (inFlight.has(b.depositAddress)) continue;
+    inFlight.add(b.depositAddress);
+    try {
+      const kp = depositFor(`bet:${race.id}:${b.agentId}:${b.owner}`);
+      const bal = await getBalanceWei(kp.address);
+      if (bal >= ethToWei(MIN_SIDEBET_ETH)) {
+        if (now >= (race.endsAt - SIDEBET_CUTOFF_MS) + LATE_GRACE_MS) {
+          try {
+            const r = await drainTo(kp, b.owner);
+            if (r) log(`late side-bet refunded ${fmtEth(r.ethMoved)} ETH`);
+          } catch (e: any) { log(`late side-bet refund failed (will retry): ${String(e?.message ?? e).slice(0, 60)}`); }
+        } else {
+          try {
+            const r = await drainTo(kp, treasury.address);   // into treasury FIRST
+            if (r) {
+              b.eth += r.ethMoved;
+              race.sidePotEth += r.ethMoved;                 // credit only what treasury holds
+              const a = agentById(b.agentId);
+              log(`side bet: ${fmtEth(r.ethMoved)} ETH on "${a?.name}" - side pool ${fmtEth(race.sidePotEth)} ETH`);
+            }
+          } catch (e: any) { log(`side-bet sweep failed, retry next pass: ${String(e?.message ?? e).slice(0, 60)}`); }
+        }
+      }
+    } catch { /* rpc hiccup */ }
