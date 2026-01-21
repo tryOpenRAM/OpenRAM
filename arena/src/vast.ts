@@ -50,3 +50,55 @@ let cached: VastStatus = {
   offer: null,
   creditsPerUnitHour: FALLBACK_CREDITS_PER_UNIT_HOUR,
   menu: [],
+};
+
+export function vastStatus(): VastStatus { return cached; }
+
+const asOffer = (o: any): VastOfferLite | null => {
+  let dph = Number(o?.dph_total ?? o?.dph_base);
+  if (!Number.isFinite(dph) || dph <= 0) return null;
+  const cpu = Math.round((dph * DOLLARS_TO_CREDITS) / UNITS_PER_GPU);
+  return {
+    id: Number(o.id),
+    gpu: String(o.gpu_name ?? "GPU"),
+    gpuRamGb: Math.round(Number(o.gpu_ram ?? 0) / 1024) || 0,
+    dollarsPerHour: dph,
+    creditsPerUnitHour: Number.isFinite(cpu) && cpu > 0 ? Math.max(5, cpu) : FALLBACK_CREDITS_PER_UNIT_HOUR,
+  };
+};
+
+/** Refresh the live market: the house's pinned offer (cheapest GPU_MODEL) AND
+ *  the player MENU — the cheapest verified ask for each GPU model, so stakers
+ *  pick the exact machine their agent rents. */
+export async function refreshVastMarket(): Promise<VastStatus> {
+  const headers: Record<string, string> = KEY ? { Authorization: `Bearer ${KEY}` } : {};
+  try {
+    const q = {
+      verified: { eq: true }, rentable: { eq: true }, rented: { eq: false },
+      gpu_name: { eq: GPU_MODEL }, num_gpus: { eq: 1 },
+      order: [["dph_total", "asc"]], type: "ask", limit: 5,
+    };
+    // NOTE: the trailing slash is load-bearing — vast.ai 301s /bundles to
+    // /bundles/ and the redirect hop turns into a 403 under Node's fetch.
+    const res = await fetch(`${API}/bundles/?q=${encodeURIComponent(JSON.stringify(q))}`, { headers, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`vast api ${res.status}`);
+    const data: any = await res.json();
+    const best = asOffer((data.offers ?? [])[0]);
+    if (best) {
+      cached = {
+        ...cached,
+        keyPresent: Boolean(KEY),
+        offer: { id: best.id, gpu: `1x ${best.gpu}`, dollarsPerHour: best.dollarsPerHour },
+        creditsPerUnitHour: best.creditsPerUnitHour,
+      };
+    }
+  } catch { /* market unreachable: keep last known (or fallback) pricing */ }
+
+  try {
+    const q = {
+      verified: { eq: true }, rentable: { eq: true }, rented: { eq: false },
+      num_gpus: { eq: 1 },
+      order: [["dph_total", "asc"]], type: "ask", limit: 64,
+    };
+    // NOTE: the trailing slash is load-bearing — vast.ai 301s /bundles to
+    // /bundles/ and the redirect hop turns into a 403 under Node's fetch.
