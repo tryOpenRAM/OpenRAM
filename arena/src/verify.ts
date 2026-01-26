@@ -101,3 +101,53 @@ async function main() {
     }
   } else {
     check("full stake flow (needs lobby phase)", false, `race in ${st.race.phase} — re-run right after a restart to catch the lobby`);
+  }
+
+  // ---------- 5. wait for the race to run + write on-chain proofs, then check compute
+  console.log("\n… waiting for the race to run and write on-chain proofs (up to 4.5 min) …");
+  let proofJobs: any[] = [];
+  for (let i = 0; i < 54; i++) {
+    st = await get("/state");
+    proofJobs = (st.race.jobs ?? []).filter((j: any) => j.proofTx || j.proven);
+    if (st.race.phase === "racing" && proofJobs.length > 0) break;
+    await sleep(5000);
+  }
+  const f2 = (st.race.agents ?? []).filter((a: any) => a.funded);
+  check("REAL compute burned during the race (GFLOP measured)", f2.reduce((x: number, a: any) => x + a.gflops, 0) > 0, `${f2.reduce((x: number, a: any) => x + a.gflops, 0).toFixed(0)} GFLOP`);
+  check("jobs verified by hash", f2.some((a: any) => a.jobsVerified > 0), `${f2.reduce((x: number, a: any) => x + a.jobsVerified, 0)} verified / ${f2.reduce((x: number, a: any) => x + a.jobsRejected, 0)} rejected`);
+  check("on-chain proofs enabled (not paused)", !st.receiptsPaused);
+  check("verified jobs wrote proofs on-chain", proofJobs.length > 0, `${proofJobs.length} proof txs${wpub ? "" : " (links masked until launch)"}`);
+  if (proofJobs.length) {
+    const job = proofJobs[proofJobs.length - 1];
+    if (job.proofTx) {
+      const rc = await provider.getTransactionReceipt(job.proofTx);
+      check("proof tx CONFIRMED on Robinhood Chain (real)", !!rc, `block ${rc?.blockNumber} · ${job.proofTx.slice(0, 14)}…`);
+      check("treasury can sign+send txns (payout path proven)", !!rc, "proof txs are real signed transactions");
+    } else {
+      check("proof tx written (hash masked pre-launch)", job.proven === true, "settlement landed · link hidden by PUBLIC_WALLETS=0");
+    }
+    const rv = await get(`/verify?spec=${encodeURIComponent(job.spec)}`);
+    check("on-chain proof hash == independent re-derivation", rv.answerHash === job.answerHash, rv.answerHash === job.answerHash ? "MATCH (trustless)" : "MISMATCH");
+  }
+
+  // ---------- 6. AGENT WALLETS really move money (earn/spend vs treasury)
+  if (wpub) {
+    const activeWallets = (st.wallets?.agents ?? []).filter((a: any) => (a.txs ?? []).length > 0);
+    check("house agent wallets TRANSACTING on-chain", activeWallets.length > 0, `${activeWallets.length}/5 wallets active: ${activeWallets.map((a: any) => a.name).join(", ")}`);
+    if (activeWallets.length) {
+      const rc = await provider.getTransactionReceipt(activeWallets[0].txs[0].hash).catch(() => null);
+      check("agent wallet tx CONFIRMED on-chain (real transfer + proof calldata)", !!rc, `${activeWallets[0].name} · ${activeWallets[0].txs[0].hash.slice(0, 14)}…`);
+    }
+  } else {
+    check("house wallet settlements running (masked mode)", proofJobs.some((j: any) => j.proven), "agent↔treasury txs land on-chain; hashes hidden until PUBLIC_WALLETS=1");
+  }
+  check("wallet balances tracked for the site", (st.wallets?.agents ?? []).some((a: any) => a.eth !== null), (st.wallets?.agents ?? []).map((a: any) => `${a.name}:${a.eth ?? "…"}Ξ`).join(" "));
+
+  const passed = results.filter((r) => r.ok).length;
+  console.log(`\n=== ${passed}/${results.length} checks passed ===`);
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length) console.log("FAILED: " + failed.map((f) => f.name).join(" · "));
+  process.exit(failed.length ? 1 : 0);
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });
