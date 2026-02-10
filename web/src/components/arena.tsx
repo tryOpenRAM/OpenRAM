@@ -47,3 +47,52 @@ export function EpochRing({ epoch, endsAt, duration }: { epoch: bigint; endsAt: 
           EPOCH {String(epoch)}
         </text>
       </svg>
+      <span className="ringlabel">race resets</span>
+    </div>
+  );
+}
+
+/**
+ * The earnings race: live positions this epoch, with parimutuel odds pulled
+ * from the open prediction market. Direct labels everywhere (name + value)
+ * per the dataviz relief rule for multi-hue bars.
+ */
+export function RaceBoard({ s, onBet }: { s: AgoraState; onBet: () => void }) {
+  const [pick, setPick] = useState<string>("");
+  const [amt, setAmt] = useState("50");
+  const [msg, setMsg] = useState<string | null>(null);
+  const race = [...s.agents]
+    .sort((a, b) => (b.epochEarnings > a.epochEarnings ? 1 : b.epochEarnings === a.epochEarnings ? 0 : -1))
+    .slice(0, 6);
+  const max = race.reduce((m, a) => (a.epochEarnings > m ? a.epochEarnings : m), 0n);
+
+  const liveMarket = s.markets.find((m) => m.epoch === s.epoch.number && !m.resolved);
+  const oddsFor = (agentId: bigint): string => {
+    if (!liveMarket || liveMarket.totalPool === 0n) return "";
+    const pool = liveMarket.candidates.find((c) => c.agentId === agentId)?.pool ?? 0n;
+    if (pool === 0n) return "";
+    const mult = Number((liveMarket.totalPool * 100n) / pool) / 100;
+    return `x${mult.toFixed(2)}`;
+  };
+
+  async function quickBet() {
+    if (!liveMarket) return;
+    const cand = liveMarket.candidates.find((c) => String(c.agentId) === (pick || String(liveMarket.candidates[0]?.agentId)));
+    if (!cand) return;
+    setMsg("signing…");
+    const err = await act(() => write.predict.bet(liveMarket.id, cand.agentId, E(Math.max(1, Number(amt) || 50))));
+    setMsg(err ?? `bet placed on ${cand.name} - odds shift as money moves`);
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
+        <div>
+          <h2>Epoch {String(s.epoch.number)} earnings race</h2>
+          <span className="sub">
+            top earner takes the prediction pool
+            {liveMarket ? ` · ${fmt(liveMarket.totalPool)} CYCLE riding` : ""}
+            {" · bets in CYCLE (demo token — not live yet)"}
+          </span>
+        </div>
+        <div className="spacer" />
