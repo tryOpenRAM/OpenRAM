@@ -226,3 +226,116 @@ function MiniCol({ label, value, strong }: { label: string; value: string; stron
 // ------------------------------------------------------------- Leaderboard
 export function Leaderboard({ s }: { s: AgoraState }) {
   const [open, setOpen] = useState<bigint | null>(null);
+  const ranked = [...s.agents].sort((a, b) => (b.earnings > a.earnings ? 1 : -1));
+  const maxEarn = ranked.reduce((m, a) => (a.earnings > m ? a.earnings : m), 1n);
+  const me = getAddress();
+  return (
+    <div className="card">
+      <CardTitle>Agent leaderboard — lifetime CYCLE earned</CardTitle>
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: 26 }}>#</th><th>Agent</th><th className="num">Rep</th>
+            <th style={{ width: "18%" }}>Earnings</th>
+            <th className="num">GPU spend</th><th className="num">Record</th>
+            <th className="num">Shares</th><th className="num">Price</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ranked.map((a, i) => (
+            <React.Fragment key={String(a.id)}>
+              <tr className="clickable" onClick={() => setOpen(open === a.id ? null : a.id)}>
+                <td className="mut">{i + 1}</td>
+                <td>
+                  <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                    <AgentAvatar id={a.id} name={a.name} size={26} />
+                    <div style={{ lineHeight: 1.25 }}>
+                      <span className="ink" style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>{a.name}</span>
+                      {a.owner === me && (
+                        <span style={{
+                          fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.08em",
+                          color: "#fff", background: "var(--violet)", borderRadius: 5,
+                          padding: "1.5px 7px", marginLeft: 7, verticalAlign: "middle",
+                        }}>YOURS</span>
+                      )}
+                      {!a.active && <span className="err"> · retired</span>}
+                      {a.parentId > 0n && <span className="mut" style={{ fontSize: 10.5 }}> · spawn of #{String(a.parentId)}</span>}
+                      <div className="mut" style={{ fontSize: 10.5, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        "{a.goal}"
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                <td className="num">{String(a.reputation)}</td>
+                <td>
+                  <div className="ink num" style={{ textAlign: "left", marginBottom: 3 }}>{fmt(a.earnings)}</div>
+                  <div style={{ height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)" }}>
+                    <div style={{
+                      height: "100%", borderRadius: 2, background: agentColor(a.id),
+                      width: `${Number((a.earnings * 1000n) / maxEarn) / 10}%`,
+                      transition: "width 600ms ease",
+                    }} />
+                  </div>
+                </td>
+                <td className="num">{fmt(a.computeSpend)}</td>
+                <td className="num"><span className="wl-w">{String(a.done)}W</span> <span className="mut">·</span> <span className="wl-l">{String(a.failed)}L</span></td>
+                <td className="num">{String(a.sharesSupply)}</td>
+                <td className="num">{fmt(a.sharePrice, 2)}</td>
+              </tr>
+              {open === a.id && (
+                <tr><td colSpan={8} style={{ padding: 0, border: "none" }}><AgentDetail a={a} /></td></tr>
+              )}
+            </React.Fragment>
+          ))}
+        </tbody>
+      </table>
+      {ranked.length === 0 && (
+        <div className="emptystate"><span className="big">⬡</span>no agents registered yet — start the swarm: <b>npm run demo</b></div>
+      )}
+    </div>
+  );
+}
+
+function AgentDetail({ a }: { a: AgentRow }) {
+  const { msg, run } = useAction();
+  return (
+    <div className="detail">
+      <div className="row" style={{ marginBottom: 10, fontSize: 12 }}>
+        <span className="mut">wallet</span> <span className="mono ink">{shortAddr(a.wallet)}</span>
+        <span className="mut">· this epoch</span> <span className="mono ink">{fmt(a.epochEarnings)} CYCLE</span>
+        <span className="mut">· dividends paid to holders come from 10% of every task payout</span>
+      </div>
+      <div className="row">
+        <button className="primary" onClick={() => run(() => write.shares.buyShares(a.id, 1), "share bought")}>
+          Buy 1 share · {fmt((a.sharePrice * 1075n) / 1000n, 2)} CYCLE
+        </button>
+        <button className="ghost" disabled={a.myShares === 0n} onClick={() => run(() => write.shares.sellShares(a.id, 1), "share sold")}>
+          Sell 1
+        </button>
+        <button className="ghost" disabled={a.myDividends === 0n} onClick={() => run(() => write.shares.claimDividends(a.id), "dividends claimed")}>
+          Claim dividends · {fmt(a.myDividends, 2)}
+        </button>
+        <span className="mut mono">you hold {String(a.myShares)}</span>
+        <Msg m={msg} />
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------- Bounties
+const TEMPLATES = [
+  { label: "Prime sum — math", make: () => `PRIME_SUM:${2000 + Math.floor(Math.random() * 8000)}`, tags: "math" },
+  { label: "Hash chain — crypto", make: () => `SHA_CHAIN:user-${Date.now() % 100000},${50 + Math.floor(Math.random() * 300)}`, tags: "crypto" },
+  { label: "Monte-Carlo pi — sim", make: () => `MONTE_PI:${50000 + Math.floor(Math.random() * 150000)},${Date.now() % 999983}`, tags: "math,sim" },
+  { label: "Matrix trace — heavy", make: () => `MATMUL_TRACE:${Date.now() % 999983},${24 + Math.floor(Math.random() * 24)}`, tags: "math,heavy" },
+  { label: "Meme — creative", make: () => `MEME:${Date.now() % 999983}`, tags: "creative" },
+];
+
+export function TaskBoard({ s }: { s: AgoraState }) {
+  const { msg, run } = useAction();
+  const [tpl, setTpl] = useState(0);
+  const [reward, setReward] = useState("120");
+  const nameOf = (id: bigint) => s.agents.find((x) => x.id === id)?.name ?? "—";
+  const now = Math.floor(Date.now() / 1000);
+
+  return (
