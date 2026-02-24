@@ -453,3 +453,115 @@ export function ComputePanel({ s }: { s: AgoraState }) {
 
 // --------------------------------------------------------------- Speculate
 export function SpeculatePanel({ s }: { s: AgoraState }) {
+  const { msg, run } = useAction();
+  const [sel, setSel] = useState<Record<string, string>>({});
+  const now = Math.floor(Date.now() / 1000);
+
+  return (
+    <>
+      {s.markets.map((m) => {
+        const live = !m.resolved && now < m.bettingEnds;
+        const winnersSet = new Set(m.winners.map(String));
+        const maxPool = m.candidates.reduce((x, c) => (c.pool > x ? c.pool : x), 1n);
+        return (
+          <div className="card" key={String(m.id)}>
+            <CardTitle>
+              Market #{String(m.id)} — top earner of epoch {String(m.epoch)}
+              <span style={{ marginLeft: "auto", textTransform: "none", letterSpacing: 0 }} className="mono">
+                {m.resolved ? (m.voided ? "VOIDED — refunds open" : "RESOLVED") : live ? `betting closes in ${m.bettingEnds - now}s` : "awaiting resolution"}
+              </span>
+            </CardTitle>
+            {m.candidates.map((c) => {
+              const w = Number((c.pool * 1000n) / maxPool) / 10;
+              const isWinner = winnersSet.has(String(c.agentId));
+              const color = agentColor(c.agentId);
+              return (
+                <div className="race-row" key={String(c.agentId)} style={{ gridTemplateColumns: "26px 130px 1fr 90px 70px" }}>
+                  <AgentAvatar id={c.agentId} name={c.name} size={21} />
+                  <span className="race-name">{isWinner ? "👑 " : ""}{c.name}</span>
+                  <div className="race-track">
+                    <div className="race-bar" style={{ width: `${Math.max(c.pool > 0n ? 2 : 0, w)}%`, background: color, boxShadow: `0 0 8px ${color}40` }} />
+                  </div>
+                  <span className="race-val">{fmt(c.pool)}</span>
+                  <span className="race-odds">{c.myBet > 0n ? `you ${fmt(c.myBet)}` : ""}</span>
+                </div>
+              );
+            })}
+            <div className="row" style={{ marginTop: 12 }}>
+              {live && (
+                <>
+                  <select value={sel[`c-${m.id}`] ?? "0"} onChange={(e) => setSel({ ...sel, [`c-${m.id}`]: e.target.value })}>
+                    {m.candidates.map((c, i) => <option key={String(c.agentId)} value={i}>{c.name}</option>)}
+                  </select>
+                  <input style={{ width: 84 }} placeholder="50" value={sel[`a-${m.id}`] ?? ""} onChange={(e) => setSel({ ...sel, [`a-${m.id}`]: e.target.value })} />
+                  <button
+                    className="primary"
+                    onClick={() => {
+                      const idx = Number(sel[`c-${m.id}`] ?? 0);
+                      const amt = Math.max(1, Number(sel[`a-${m.id}`]) || 50);
+                      run(() => write.predict.bet(m.id, m.candidates[idx].agentId, E(amt)), "you're in — watch the race");
+                    }}
+                  >
+                    Bet
+                  </button>
+                </>
+              )}
+              {!m.resolved && !live && (
+                <button className="ghost" onClick={() => run(() => write.predict.resolve(m.id), "resolved from the earnings ledger")}>
+                  Resolve on-chain
+                </button>
+              )}
+              {m.resolved && !m.myClaimed && m.candidates.some((c) => c.myBet > 0n) && (
+                <button className="primary" onClick={() => run(() => write.predict.claim(m.id), "payout claimed")}>Claim payout</button>
+              )}
+              <span className="mut" style={{ fontSize: 11.5 }}>
+                pool <span className="ink mono">{fmt(m.totalPool)}</span> CYCLE · 3% rake to stakers · resolution reads the registry ledger, no oracle
+              </span>
+              <Msg m={msg} />
+            </div>
+          </div>
+        );
+      })}
+      {s.markets.length === 0 && (
+        <div className="card"><div className="emptystate"><span className="big">★</span>no open markets — one opens each epoch while the swarm runs</div></div>
+      )}
+    </>
+  );
+}
+
+// ------------------------------------------------------------------- Stake
+export function StakePanel({ s }: { s: AgoraState }) {
+  const { msg, run } = useAction();
+  const [amt, setAmt] = useState("1000");
+  const share = s.stats.totalStaked > 0n ? Number((s.me.staked * 10000n) / s.stats.totalStaked) / 100 : 0;
+  return (
+    <div className="card">
+      <CardTitle>Staking vault — where every fee in the economy lands</CardTitle>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+        <MiniStat label="Total staked" value={fmt(s.stats.totalStaked)} />
+        <MiniStat label="Lifetime fees" value={fmt(s.stats.vaultFees, 2)} accent />
+        <MiniStat label="Your stake" value={`${fmt(s.me.staked)} (${share}%)`} />
+        <MiniStat label="Your claimable" value={fmt(s.me.pending, 4)} accent />
+      </div>
+      <div className="row">
+        <input style={{ width: 110 }} value={amt} onChange={(e) => setAmt(e.target.value)} />
+        <button className="primary" onClick={() => run(() => write.vault.stake(E(Math.max(1, Number(amt) || 1))), "staked — fees now stream to you")}>Stake</button>
+        <button className="ghost" disabled={s.me.staked === 0n} onClick={() => run(() => write.vault.unstake(E(Math.max(1, Number(amt) || 1))), "unstaked")}>Unstake</button>
+        <button className="ghost" disabled={s.me.pending === 0n} onClick={() => run(() => write.vault.claim(), "fees claimed")}>Claim</button>
+        <Msg m={msg} />
+      </div>
+      <div className="mut" style={{ marginTop: 12, fontSize: 11.5, lineHeight: 1.7 }}>
+        <span className="ink">Fee sources:</span> 5% of every task payout · 2.5% of compute rent · 2.5% of share trades · 3% prediction rake · 100% of slashed stakes and burned bonds.
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 13px" }}>
+      <div className="mut" style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{label}</div>
+      <div className="mono" style={{ fontSize: 17, fontWeight: 600, color: accent ? "var(--accent)" : "var(--ink)" }}>{value}</div>
+    </div>
+  );
+}
