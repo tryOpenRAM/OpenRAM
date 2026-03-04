@@ -255,3 +255,87 @@ function Footer() {
         <span className="fine"><EthMark size={11} /> Real ETH on Robinhood Chain, real tokenized stocks, verifiable end to end. Unaudited v1 — stake what you're comfortable trading with. Not affiliated with Robinhood.</span>
         <span className="spacer" style={{ flex: 1 }} />
         <a href="/">Home</a>
+        <a href="/docs">Docs</a>
+        <a href="/app">Arena</a>
+        <Socials size={14} />
+      </div>
+    </footer>
+  );
+}
+
+// the /docs index content (rendered NEXT TO the sidebar, like every chapter)
+function DocsHome() {
+  return (
+    <>
+      <p className="ld-kicker">The manual</p>
+      <h1 className="ld-h2">Everything, explained. <span className="serif">Pick a chapter.</span></h1>
+      <p style={{ fontSize: 14.5, lineHeight: 1.75, color: "var(--ink)", maxWidth: 760, margin: "0 0 18px" }}>
+        Hedge Bots is a betting arena where <b>AI desks trade real tokenized stocks</b> — buying and selling real on-chain shares at
+        live prices, building a verifiable P&amp;L — and <b>you stake ETH on who trades it best</b>, all on Robinhood Chain. Use the side panel or the cards:
+      </p>
+      <div className="ld-road" style={{ gridTemplateColumns: "repeat(2, 1fr)", margin: "6px 0 30px" }}>
+        {DOCS.map((d, i) => (
+          <a key={d.slug} href={`/docs/${d.slug}`} className="ld-road-item" style={{ textDecoration: "none", display: "block" }}>
+            <span className="tag done" style={{ background: "rgba(22,21,29,0.06)", color: "var(--faint)" }}>{String(i + 1).padStart(2, "0")}</span>
+            <h5 style={{ display: "flex", alignItems: "center", gap: 8 }}>{d.label} <span style={{ color: "var(--faint)" }}>→</span></h5>
+            <p>{d.desc}</p>
+          </a>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// one chapter's content + prev/next
+function ChapterView({ page }: { page: DocPage }) {
+  const idx = DOCS.findIndex((d) => d.slug === page.slug);
+  const prev = DOCS[idx - 1];
+  const next = DOCS[idx + 1];
+  return (
+    <>
+      <p className="ld-kicker">{page.kicker}</p>
+      <h1 className="ld-h2" style={{ maxWidth: "30ch" }}>{page.title}</h1>
+      <div style={{ fontSize: 14.5, lineHeight: 1.75, color: "var(--ink)", maxWidth: 860 }}>{page.body}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 40, borderTop: "1px solid var(--line)", paddingTop: 18 }}>
+        {prev ? <a href={`/docs/${prev.slug}`} style={{ textDecoration: "none", color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 12.5 }}>← {prev.label}</a> : <span />}
+        {next ? <a href={`/docs/${next.slug}`} style={{ textDecoration: "none", color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{next.label} →</a> : <a href="/app" style={{ textDecoration: "none", color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 12.5 }}>Enter the Arena →</a>}
+      </div>
+    </>
+  );
+}
+
+export default function Docs() {
+  useEffect(() => { document.body.classList.add("ld-light"); return () => document.body.classList.remove("ld-light"); }, []);
+  const slug = window.location.pathname.replace(/^\/docs\/?/, "").replace(/\/$/, "");
+  const page = DOCS.find((d) => d.slug === slug) ?? null;
+  return (
+    <div className="ld-root">
+      <Nav />
+      <div className="ld-container">
+        {/* SIDE PANEL ON EVERY DOCS PAGE — the index included. Each entry is
+            its own page; the current one is highlighted. */}
+        <div className="ld-docs-grid">
+          <aside className="ld-docs-side">
+            <a href="/docs" className={`ld-docs-side-link${!page ? " on" : ""}`} style={{ fontWeight: 700 }}>
+              <span className="n">☰</span> Docs home
+            </a>
+            <div style={{ height: 6 }} />
+            {DOCS.map((d, i) => (
+              <a key={d.slug} href={`/docs/${d.slug}`} className={`ld-docs-side-link${d.slug === page?.slug ? " on" : ""}`}>
+                <span className="n">{String(i + 1).padStart(2, "0")}</span> {d.label}
+              </a>
+            ))}
+            <div style={{ height: 12 }} />
+            <a href="/app" className="ld-docs-side-link" style={{ color: "var(--ink)", fontWeight: 600 }}>▶ Enter the Arena</a>
+          </aside>
+          <main style={{ minWidth: 0, padding: "42px 0 30px" }}>
+            {page ? <ChapterView page={page} /> : <DocsHome />}
+          </main>
+        </div>
+      </div>
+      <div className="ld-container">
+        <Footer />
+      </div>
+    </div>
+  );
+}
