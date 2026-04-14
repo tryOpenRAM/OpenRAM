@@ -33,3 +33,36 @@ export interface RealTrade {
   t: number; name: string; strategy: string; agentId: string;
   sym: string; side: "buy" | "sell"; qty: number; px: number; usd: number;
   receiptTx: string; proven: boolean;
+}
+
+/** Fetch every real stock-token buy across the 5 agent wallets. `prices` maps
+ *  symbol -> live USD (from the arena market) to fill in notional. */
+export async function fetchRealTrades(prices: Record<string, number>): Promise<RealTrade[]> {
+  const out: RealTrade[] = [];
+  await Promise.all(WALLETS.map(async (w) => {
+    try {
+      const r = await fetch(`${EXPLORER}/api/v2/addresses/${w.address}/token-transfers?type=ERC-20`, { signal: AbortSignal.timeout(9000) });
+      const j: any = await r.json();
+      for (const t of j.items ?? []) {
+        const tokenAddr = (t.token?.address ?? t.token?.address_hash ?? "").toLowerCase();
+        const sym = STOCK_TOKENS[tokenAddr];
+        if (!sym) continue;
+        const incoming = t.to?.hash?.toLowerCase() === w.address.toLowerCase();
+        const dec = Number(t.token?.decimals ?? 18);
+        const qty = Number(t.total?.value ?? t.value ?? 0) / 10 ** dec;
+        if (!(qty > 0)) continue;
+        const px = prices[sym] ?? 0;
+        out.push({
+          t: t.timestamp ? Date.parse(t.timestamp) : 0,
+          name: w.name, strategy: w.strategy, agentId: "",
+          sym, side: incoming ? "buy" : "sell",
+          qty: Math.round(qty * 10000) / 10000, px,
+          usd: Math.round(qty * px * 100) / 100,
+          receiptTx: t.transaction_hash, proven: true,
+        });
+      }
+    } catch { /* wallet fetch blip — skip, others still fill */ }
+  }));
+  out.sort((a, b) => b.t - a.t);
+  return out.slice(0, 40);
+}
