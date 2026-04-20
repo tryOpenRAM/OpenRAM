@@ -1,0 +1,72 @@
+/* ============================================================
+   Hedge Bots terminal — Robinhood-flavored light system.
+   Paper surfaces, ink type, signature-green actions & money.
+   Data marks use the validated LIGHT categorical palette.
+   ============================================================ */
+:root {
+  --page: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f6faf6;
+  --border: rgba(18, 26, 18, 0.09);
+  --border-strong: rgba(18, 26, 18, 0.18);
+
+  --ink: #121a12;
+  --ink-2: #525f52;
+  --muted: #849184;
+  --grid: rgba(18, 26, 18, 0.05);
+
+  /* Robinhood signature green. --rh is the brand hue (glows, dots, dark
+     surfaces); --rh-deep is the darker press of it that stays readable as
+     text/buttons on paper. The old --violet name is kept as the ACTION token
+     so every component keeps working — it now resolves to the green. */
+  --rh: #00c805;
+  --rh-deep: #008a36;
+  --violet: var(--rh-deep);            /* primary actions */
+  --violet-soft: #e4f6e6;
+  --violet-border: rgba(0, 200, 5, 0.4);
+  --violet-glow: rgba(0, 200, 5, 0.05);
+
+  --accent: #00913c;          /* money, live, positive */
+  --accent-dim: rgba(0, 200, 5, 0.1);
+  --accent-glow: rgba(0, 200, 5, 0.3);
+
+  /* validated categorical series (light) — data marks only */
+  --s1: #2a78d6; --s2: #1baf7a; --s3: #eda100; --s4: #008300;
+  --s5: #4a3aa7; --s6: #e34948; --s7: #e87ba4; --s8: #eb6834;
+
+  --good: #0c9c0c;
+  --warning: #d97706;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+
+  --seq-track: #cde2fb; /* light step of the blue ramp: meter tracks */
+
+  --font: "Space Grotesk", system-ui, sans-serif;
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  background:
+    radial-gradient(1000px 480px at 50% -12%, rgba(0, 200, 5, 0.05), transparent 60%),
+    var(--page);
+  background-attachment: fixed;
+  color: var(--ink-2);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: #d6f5d9; color: var(--ink); }
+
+h1, h2, h3 { color: var(--ink); margin: 0; font-family: var(--font-display); }
+.mono, td, .num { font-family: var(--font-mono); }
+
+.app { max-width: 1560px; margin: 0 auto; padding: 16px 22px 60px; }
+
+/* ---------------------------------------------------------- topbar */
+.topbar { display: flex; align-items: center; gap: 12px; padding: 8px 2px 18px; }
+.brand {
