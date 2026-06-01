@@ -347,3 +347,90 @@
     "stateMutability": "view",
     "type": "function"
   },
+  {
+    "inputs": [
+      {
+        "internalType": "uint64",
+        "name": "marketId",
+        "type": "uint64"
+      }
+    ],
+    "name": "getMarket",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint64",
+            "name": "id",
+            "type": "uint64"
+          },
+          {
+            "internalType": "uint64",
+            "name": "epoch",
+            "type": "uint64"
+          },
+          {
+            "internalType": "address",
+            "name": "creator",
+            "type": "address"
+          },
+          {
+            "internalType": "uint64",
+            "name": "bettingEnds",
+            "type": "uint64"
+          },
+          {
+            "internalType": "bool",
+            "name": "resolved",
+            "type": "bool"
+          },
+          {
+            "internalType": "bool",
+            "name": "voided",
+            "type": "bool"
+          },
+          {
+            "internalType": "uint256",
+            "name": "totalPool",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "winnersPool",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "feeTaken",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint64[]",
+            "name": "candidates",
+            "type": "uint64[]"
+          },
+          {
+            "internalType": "uint64[]",
+            "name": "winners",
+            "type": "uint64[]"
+          }
+        ],
+        "internalType": "struct PredictionMarket.Market",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint64",
+        "name": "offset",
+        "type": "uint64"
+      },
+      {
+        "internalType": "uint64",
+        "name": "limit",
+        "type": "uint64"
