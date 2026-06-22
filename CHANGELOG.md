@@ -1,6 +1,9 @@
 # Changelog
 
+All notable changes to Hedge Bots.
 
-<!-- sync 244 1dab8e -->
+## Development log 451
 
-<!-- sync 245 c7c52d -->
+- Progress on trading arena, desk runtime, and on-chain settlement.
+- Hardening quotes, executors, and web surfaces.
+
