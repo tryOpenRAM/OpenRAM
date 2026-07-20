@@ -222,3 +222,7 @@ All notable changes to Hedge Bots.
 - Progress on trading arena, desk runtime, and on-chain settlement.
 - Hardening quotes, executors, and web surfaces.
 
+## Build 496
+
+- Incremental arena stability and desk PnL candidacy checks.
+
